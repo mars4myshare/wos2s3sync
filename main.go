@@ -20,7 +20,7 @@ func main() {
 	sk := flag.String("sk", "", "secret key")
 	endpoint := flag.String("endpoint", "", "secret key")
 	bucket := flag.String("bucket", "", "source bucket")
-	destHost := flag.String("wos", "", "dest storage")
+	wosHost := flag.String("wos", "", "dest storage")
 	reportFile := flag.String("report", "", "sync report")
 	oidFile := flag.String("oidfile", "", "oid file or previous report file when retry")
 	flag.Parse()
@@ -28,7 +28,7 @@ func main() {
 		*sk == "" ||
 		*endpoint == "" ||
 		*bucket == "" ||
-		*destHost == "" ||
+		*wosHost == "" ||
 		*oidFile == "" ||
 		*reportFile == "" {
 		flag.Usage()
@@ -41,10 +41,10 @@ func main() {
 	}
 	reportWriter := bufio.NewWriter(file)
 	defer file.Close()
-	log.Infof("Migrating data from %s/%s to %s with %d worker...",
-		*endpoint, *bucket, *destHost, SyncWorkerCnt)
+	log.Infof("Migrating data from %s to %s/%s with %d worker...",
+		*wosHost, *endpoint, *bucket, SyncWorkerCnt)
 	dest := storage.NewS3Storage(*endpoint, *ak, *sk, *bucket)
-	source := storage.NewWosStorage(*destHost)
+	source := storage.NewWosStorage(*wosHost)
 
 	oidFH, err := os.Open(*oidFile)
 	if err != nil {

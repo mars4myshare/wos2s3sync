@@ -8,6 +8,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+	log "github.com/sirupsen/logrus"
 )
 
 type S3Storage struct {
@@ -50,18 +52,17 @@ func (t *S3Storage) Write(key string, obj SyncObject) (string, error) {
 
 	go func() {
 		defer pw.Close()
-		svc := s3.New(session.New(t.Config))
-		contentLength := obj.GetContentLength()
-		contentType := obj.GetContentType()
-		input := &s3.PutObjectInput{
-			Body:          aws.ReadSeekCloser(tr),
-			Bucket:        aws.String(t.Bucket),
-			Key:           aws.String(key),
-			ContentLength: &contentLength,
-			ContentType:   &contentType,
-			//StorageClass: aws.String("STANDARD_IA"),
+		uploader := s3manager.NewUploader(session.New(t.Config))
+		input := &s3manager.UploadInput{
+			Bucket: aws.String(t.Bucket),
+			Key:    aws.String(key),
+			Body:   tr,
 		}
-		_, err := svc.PutObject(input)
+
+		_, err := uploader.Upload(input)
+		if err != nil {
+			log.Debugf("Unable to upload %s to %s, %v", key, t.Bucket, err)
+		}
 		done <- Result{"", err}
 	}()
 	go func() {

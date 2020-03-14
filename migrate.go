@@ -49,6 +49,7 @@ func syncObject(syncObj syncObjItem, target storage.StorDest, source storage.Sto
 	log.Debugf("writing object: %s", syncObj.key)
 	originMD5, err := target.Write(syncObj.key, r)
 	if err != nil {
+		log.Errorf("failed to write object %s: %s", syncObj.key, err.Error())
 		return syncResult{oldKey: syncObj.key, err: err}
 	}
 	log.Debugf("wrote object: %s", syncObj.key)
