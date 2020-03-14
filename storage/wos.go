@@ -14,7 +14,7 @@ type WosStorage struct {
 	readUrlPrefix string
 }
 
-func NewWosStorage(host, policy string) *WosStorage {
+func NewWosStorage(host string) *WosStorage {
 	s := &WosStorage{
 		host: host,
 	}
@@ -26,7 +26,7 @@ func NewWosStorage(host, policy string) *WosStorage {
 
 // Read read the wos server and create a wos object
 // remember to close the object body after use
-func (t *WosStorage) Read(key string) (*SyncObjectImp, error) {
+func (t *WosStorage) Read(key string) (SyncObject, error) {
 	client := http.Client{
 		Timeout: time.Duration(WosReadTimeout),
 	}
@@ -46,7 +46,9 @@ func (t *WosStorage) Read(key string) (*SyncObjectImp, error) {
 		return nil, fmt.Errorf("wos read error %s: http failed code: %d", key, resp.StatusCode)
 	}
 
-	wo := SyncObjectImp{}
+	wo := SyncObjectImp{
+		length: -1,
+	}
 	ddnStatus := ""
 	for k, v := range resp.Header {
 		if strings.ToLower(k) == "x-ddn-status" {
@@ -64,7 +66,7 @@ func (t *WosStorage) Read(key string) (*SyncObjectImp, error) {
 		}
 	}
 
-	if ddnStatus != "0 ok" {
+	if ddnStatus == "" {
 		resp.Body.Close()
 		return nil, fmt.Errorf("wos read error %s: not found x-ddn-status", key)
 	}
@@ -72,9 +74,20 @@ func (t *WosStorage) Read(key string) (*SyncObjectImp, error) {
 	if ddnStatus != "0 ok" {
 		resp.Body.Close()
 		return nil, fmt.Errorf(
-			"wos read error %s: failed x-ddn-status code: %d",
+			"wos read error %s: failed x-ddn-status code: %s",
 			key, ddnStatus)
 	}
+
+	if wo.contentType == "" {
+		resp.Body.Close()
+		return nil, fmt.Errorf("wos read error %s: not found contentType", key)
+	}
+
+	if wo.length == -1 {
+		resp.Body.Close()
+		return nil, fmt.Errorf("wos read error %s: not found length", key)
+	}
+
 	wo.body = resp.Body
 	return &wo, nil
 }

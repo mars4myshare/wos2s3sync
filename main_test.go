@@ -58,13 +58,17 @@ func (t *DB) write(key string, c []byte) {
 	t.data[key] = c
 }
 
-func setupWosServer(t *testing.T, writePolicy string) *httptest.Server {
+func setupWosServer(t *testing.T, oids []string) *httptest.Server {
 	db := DB{data: map[string][]byte{}}
+	for _, oid := range oids {
+		db.data[oid] = []byte(oid + " content")
+	}
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mux.Lock()
 		defer mux.Unlock()
 		if r.Method == "POST" {
-			wosServePost(t, w, r, writePolicy, db)
+			wosServePost(t, w, r, db)
 		} else if r.Method == "GET" {
 			uri := r.URL.String()
 			oid := strings.TrimPrefix(uri, "/objects/")
@@ -86,16 +90,10 @@ func setupWosServer(t *testing.T, writePolicy string) *httptest.Server {
 	return server
 }
 
-func wosServePost(t *testing.T, w http.ResponseWriter, r *http.Request, writePolicy string, db DB) {
+func wosServePost(t *testing.T, w http.ResponseWriter, r *http.Request, db DB) {
 	if r.URL.String() != "/cmd/put" {
 		t.Errorf("unsupported post request: %s", r.URL.String())
 		http.Error(w, "", http.StatusBadRequest)
-		return
-	}
-	policy := r.Header.Get("x-ddn-policy")
-	if policy != writePolicy {
-		t.Errorf("missing header x-ddn-policy\n")
-		http.Error(w, "missing x-ddn-policy header", http.StatusBadRequest)
 		return
 	}
 
@@ -119,7 +117,7 @@ func wosServePost(t *testing.T, w http.ResponseWriter, r *http.Request, writePol
 	w.WriteHeader(http.StatusOK)
 }
 
-func setupS3Server(bucket string, keys []string) (*httptest.Server, error) {
+func setupS3Server(bucket string) (*httptest.Server, error) {
 	backend := s3mem.New()
 	faker := gofakes3.New(backend)
 	ts := httptest.NewServer(faker.Server())
@@ -144,112 +142,93 @@ func setupS3Server(bucket string, keys []string) (*httptest.Server, error) {
 		return nil, err
 	}
 
-	for _, key := range keys {
-		// Upload a new object "testobject" with the string "Hello World!" to our "newbucket".
-		_, err = s3Client.PutObject(&s3.PutObjectInput{
-			Body:   strings.NewReader(key + " content"),
-			Bucket: aws.String(bucket),
-			Key:    aws.String(key),
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	return ts, nil
 }
 
-func TestMigrate(t *testing.T) {
-	bucket := "bucket1"
-	keys := []string{"k1", "k2", "k3", "k4"}
-	ak := "u1"
-	sk := "s1"
-	s3, err := setupS3Server(bucket, keys)
-	if err != nil {
-		t.Errorf("failed to prepare test data: %s", err.Error())
-		return
-	}
-	defer s3.Close()
+// func TestMigrate(t *testing.T) {
+// 	bucket := "bucket1"
+// 	keys := []string{"k1", "k2", "k3", "k4"}
 
-	wosPolicy := "dev"
-	wos := setupWosServer(t, wosPolicy)
-	defer wos.Close()
-	runMigrateTest(t, s3.URL, ak, sk, bucket,
-		strings.TrimPrefix(wos.URL, "http://"), wosPolicy, nil, keys)
-}
+// 	wos := setupWosServer(t, keys)
+// 	defer wos.Close()
 
-func TestMigrateMoreThan1Page(t *testing.T) {
-	bucket := "bucket1"
-	keys := []string{"k1", "k2", "k3", "k4"}
-	ListPageSize = 2
-	ak := "u1"
-	sk := "s1"
-	s3, err := setupS3Server(bucket, keys)
-	if err != nil {
-		t.Errorf("failed to prepare test data: %s", err.Error())
-		return
-	}
-	defer s3.Close()
+// 	ak := "u1"
+// 	sk := "s1"
+// 	s3, err := setupS3Server(bucket)
+// 	if err != nil {
+// 		t.Errorf("failed to prepare test data: %s", err.Error())
+// 		return
+// 	}
+// 	defer s3.Close()
 
-	wosPolicy := "dev"
-	wos := setupWosServer(t, wosPolicy)
-	defer wos.Close()
+// 	runMigrateTest(t, s3.URL, ak, sk, bucket,
+// 		strings.TrimPrefix(wos.URL, "http://"), nil, keys)
+// }
 
-	runMigrateTest(t, s3.URL, ak, sk, bucket,
-		strings.TrimPrefix(wos.URL, "http://"), wosPolicy, nil, keys)
-}
+// func TestMigrateMoreThan1Page(t *testing.T) {
+// 	bucket := "bucket1"
+// 	keys := []string{"k1", "k2", "k3", "k4"}
+// 	ListPageSize = 2
+// 	ak := "u1"
+// 	sk := "s1"
+// 	s3, err := setupS3Server(bucket, keys)
+// 	if err != nil {
+// 		t.Errorf("failed to prepare test data: %s", err.Error())
+// 		return
+// 	}
+// 	defer s3.Close()
 
-func TestMigrateEmptyBucket(t *testing.T) {
-	bucket := "bucket1"
-	keys := []string{}
-	ak := "u1"
-	sk := "s1"
-	s3, err := setupS3Server(bucket, keys)
-	if err != nil {
-		t.Errorf("failed to prepare test data: %s", err.Error())
-		return
-	}
-	defer s3.Close()
+// 	wos := setupWosServer(t)
+// 	defer wos.Close()
 
-	wosPolicy := "dev"
-	wos := setupWosServer(t, wosPolicy)
-	defer wos.Close()
+// 	runMigrateTest(t, s3.URL, ak, sk, bucket,
+// 		strings.TrimPrefix(wos.URL, "http://"), nil, keys)
+// }
 
-	runMigrateTest(t, s3.URL, ak, sk, bucket,
-		strings.TrimPrefix(wos.URL, "http://"), wosPolicy, nil, keys)
-}
+// func TestMigrateEmptyBucket(t *testing.T) {
+// 	bucket := "bucket1"
+// 	keys := []string{}
+// 	ak := "u1"
+// 	sk := "s1"
+// 	s3, err := setupS3Server(bucket, keys)
+// 	if err != nil {
+// 		t.Errorf("failed to prepare test data: %s", err.Error())
+// 		return
+// 	}
+// 	defer s3.Close()
 
-func TestMigrateWithRetry(t *testing.T) {
-	file, err := ioutil.TempFile("", "retryfile")
+// 	wos := setupWosServer(t)
+// 	defer wos.Close()
+
+// 	runMigrateTest(t, s3.URL, ak, sk, bucket,
+// 		strings.TrimPrefix(wos.URL, "http://"), nil, keys)
+// }
+
+func TestMigrateWithOidFile(t *testing.T) {
+	file, err := ioutil.TempFile("", "oidfile")
 	if err != nil {
 		t.Errorf("failed to create retry file: %s", err.Error())
 		return
 	}
 	defer os.Remove(file.Name())
 	w := bufio.NewWriter(file)
-	fmt.Fprintln(w,
-		"1577358017,fail,false,k1,f423580f-cb2c-40b5-96db-a03553ab70b2")
-	fmt.Fprintln(w,
-		"1577358017,ok,true,k2,f423580f-cb2c-40b5-96db-a03553ab70b2")
-	fmt.Fprintln(w,
-		"1577358017,fail,false,k3,f423580f-cb2c-40b5-96db-a03553ab70b2")
-	fmt.Fprintln(w,
-		"1577358017,ok,true,k4,f423580f-cb2c-40b5-96db-a03553ab70b2")
-	w.Flush()
-
+	generateOidFileContent(w)
 	bucket := "bucket1"
-	keys := []string{"k1", "k3"}
-	s3, err := setupS3Server(bucket, keys)
+	keys := []string{
+		"f423580f-cb2c-40b5-96db-a03553ab70b2",
+		"f423580f-cb2c-40b5-96db-a03553ab70b3",
+		"f423580f-cb2c-40b5-96db-a03553ab70b4",
+		"f423580f-cb2c-40b5-96db-a03553ab70b5",
+	}
+	s3, err := setupS3Server(bucket)
 	if err != nil {
 		t.Errorf("failed to prepare test data: %s", err.Error())
 		return
 	}
 	defer s3.Close()
 
-	wosPolicy := "dev"
-	wos := setupWosServer(t, wosPolicy)
+	wos := setupWosServer(t, keys)
 	defer wos.Close()
-
 	ak := "u1"
 	sk := "s1"
 
@@ -260,13 +239,46 @@ func TestMigrateWithRetry(t *testing.T) {
 	}
 
 	runMigrateTest(t, s3.URL, ak, sk, bucket,
-		strings.TrimPrefix(wos.URL, "http://"), wosPolicy, retryF, keys)
+		strings.TrimPrefix(wos.URL, "http://"), retryF, keys)
+}
+
+func TestMigrateWithRetry(t *testing.T) {
+	file, err := ioutil.TempFile("", "retryfile")
+	if err != nil {
+		t.Errorf("failed to create retry file: %s", err.Error())
+		return
+	}
+	defer os.Remove(file.Name())
+	w := bufio.NewWriter(file)
+	generateRetryFileContent(w)
+	bucket := "bucket1"
+	keys := []string{"k1", "k3"}
+	s3, err := setupS3Server(bucket)
+	if err != nil {
+		t.Errorf("failed to prepare test data: %s", err.Error())
+		return
+	}
+	defer s3.Close()
+
+	wos := setupWosServer(t, keys)
+	defer wos.Close()
+	ak := "u1"
+	sk := "s1"
+
+	retryF, err := os.Open(file.Name())
+	if err != nil {
+		t.Errorf("failed to open retry file %s: %s", file.Name(), err.Error())
+		return
+	}
+
+	runMigrateTest(t, s3.URL, ak, sk, bucket,
+		strings.TrimPrefix(wos.URL, "http://"), retryF, keys)
 }
 
 func verifyReport(t *testing.T, report string, wantKeys []string) {
 	entries := strings.Split(report, "\n")
 	if len(entries) != len(wantKeys)+1 {
-		t.Errorf("unexpected report num(%d): %s", len(entries), report)
+		t.Errorf("report size got %d;want %d:\n %s", len(entries), len(wantKeys)+1, report)
 		return
 	}
 	resultKeys := make([]string, len(entries)-1)
@@ -275,7 +287,7 @@ func verifyReport(t *testing.T, report string, wantKeys []string) {
 			continue
 		}
 		items := strings.Split(e, ",")
-		if len(items) != 5 {
+		if len(items) != 4 {
 			t.Errorf("unexpected report entry: %s", e)
 			continue
 		}
@@ -297,17 +309,37 @@ func verifyReport(t *testing.T, report string, wantKeys []string) {
 }
 
 func runMigrateTest(t *testing.T, s3Endpoint, ak, sk, bucket string,
-	wosEndpoint, wosPolicy string, retryF *os.File,
+	wosEndpoint string, retryF *os.File,
 	expectedKeys []string) {
-	source := storage.NewS3Storage(s3Endpoint, ak, sk, bucket)
-	dest := storage.NewWosStorage(wosEndpoint, wosPolicy)
+	dest := storage.NewS3Storage(s3Endpoint, ak, sk, bucket)
+	source := storage.NewWosStorage(wosEndpoint)
 	report := &memWriter{}
 	reportWriter := bufio.NewWriter(report)
-	if retryF == nil {
-		migrate(dest, source, "", reportWriter, nil)
-	} else {
-		migrate(dest, source, "", reportWriter, retryF)
-	}
+	migrate(dest, source, reportWriter, retryF)
 
 	verifyReport(t, string(report.data), expectedKeys)
+}
+
+func generateRetryFileContent(w *bufio.Writer) {
+	fmt.Fprintln(w,
+		"1577358017,fail,false,k1,f423580f-cb2c-40b5-96db-a03553ab70b2")
+	fmt.Fprintln(w,
+		"1577358017,ok,true,k2,f423580f-cb2c-40b5-96db-a03553ab70b3")
+	fmt.Fprintln(w,
+		"1577358017,fail,false,k3,f423580f-cb2c-40b5-96db-a03553ab70b4")
+	fmt.Fprintln(w,
+		"1577358017,ok,true,k4,f423580f-cb2c-40b5-96db-a03553ab70b5")
+	w.Flush()
+}
+
+func generateOidFileContent(w *bufio.Writer) {
+	fmt.Fprintln(w,
+		"f423580f-cb2c-40b5-96db-a03553ab70b2")
+	fmt.Fprintln(w,
+		"f423580f-cb2c-40b5-96db-a03553ab70b3")
+	fmt.Fprintln(w,
+		"f423580f-cb2c-40b5-96db-a03553ab70b4")
+	fmt.Fprintln(w,
+		"f423580f-cb2c-40b5-96db-a03553ab70b5")
+	w.Flush()
 }

@@ -22,19 +22,17 @@ func main() {
 	bucket := flag.String("bucket", "", "source bucket")
 	destHost := flag.String("wos", "", "dest storage")
 	reportFile := flag.String("report", "", "sync report")
-	wosPolicy := flag.String("wospolicy", "", "wos policy to write data")
-	sourceMarker := flag.String("mark", "", "source bucket list maker")
-	retryFile := flag.String("retryfile", "", "retry based on report file")
+	oidFile := flag.String("oidfile", "", "oid file or previous report file when retry")
 	flag.Parse()
 	if *ak == "" ||
 		*sk == "" ||
 		*endpoint == "" ||
 		*bucket == "" ||
 		*destHost == "" ||
-		*reportFile == "" ||
-		*wosPolicy == "" {
+		*oidFile == "" ||
+		*reportFile == "" {
 		flag.Usage()
-		log.Fatal("missing access key, secret key, endpoint, bucket, dest host, wos write policy or report file")
+		log.Fatal("missing access key, secret key, endpoint, bucket, dest host, oid list or report file")
 	}
 
 	file, err := os.OpenFile(*reportFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
@@ -43,22 +41,17 @@ func main() {
 	}
 	reportWriter := bufio.NewWriter(file)
 	defer file.Close()
-	log.Infof("Migrating data from %s/%s to %s(%s) with %d worker...",
-		*endpoint, *bucket, *destHost, *wosPolicy, SyncWorkerCnt)
-	source := storage.NewS3Storage(*endpoint, *ak, *sk, *bucket)
-	dest := storage.NewWosStorage(*destHost, *wosPolicy)
+	log.Infof("Migrating data from %s/%s to %s with %d worker...",
+		*endpoint, *bucket, *destHost, SyncWorkerCnt)
+	dest := storage.NewS3Storage(*endpoint, *ak, *sk, *bucket)
+	source := storage.NewWosStorage(*destHost)
 
-	if *retryFile == "" {
-		migrate(dest, source, *sourceMarker, reportWriter, nil)
-	} else {
-		retryF, err := os.Open(*retryFile)
-		if err != nil {
-			log.Fatalf("failed to open %s: %s", *retryFile, err.Error())
-		}
-		defer retryF.Close()
-		migrate(dest, source, *sourceMarker, reportWriter, retryF)
+	oidFH, err := os.Open(*oidFile)
+	if err != nil {
+		log.Fatalf("failed to open %s: %s", *oidFile, err.Error())
 	}
-
+	defer oidFH.Close()
+	migrate(dest, source, reportWriter, oidFH)
 }
 
 func init() {

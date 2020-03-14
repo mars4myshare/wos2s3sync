@@ -21,26 +21,24 @@ type syncResult struct {
 	err      error
 	verified bool
 	oldKey   string
-	newKey   string
 }
 
 // record
-// format: ts, sync status, verify status, old key, new, key[, error]
+// format: ts, sync status, verify status, old key[, error]
 func (t *syncResult) record(w *bufio.Writer) {
 
 	if t.err != nil {
-		w.WriteString(fmt.Sprintf("%d,fail,false,%s,%s,%s\n",
-			time.Now().Unix(), t.oldKey, t.newKey, t.err.Error()))
+		w.WriteString(fmt.Sprintf("%d,fail,false,%s,%s\n",
+			time.Now().Unix(), t.oldKey, strings.ReplaceAll(t.err.Error(), "\n", " ")))
 	} else {
-		w.WriteString(fmt.Sprintf("%d,ok,%t,%s,%s\n",
-			time.Now().Unix(), t.verified, t.oldKey, t.newKey))
+		w.WriteString(fmt.Sprintf("%d,ok,%t,%s\n",
+			time.Now().Unix(), t.verified, t.oldKey))
 	}
 
 	w.Flush()
 }
 
 func syncObject(syncObj syncObjItem, target storage.StorDest, source storage.StorSrc) syncResult {
-
 	log.Debugf("retriving object: %s", syncObj.key)
 	r, err := source.Read(syncObj.key)
 	if err != nil {
@@ -58,31 +56,31 @@ func syncObject(syncObj syncObjItem, target storage.StorDest, source storage.Sto
 	log.Debugf("verifying object: %s", syncObj.key)
 	targetObj, err := target.Read(syncObj.key)
 	if err != nil {
-		return syncResult{oldKey: syncObj.key, newKey: result, err: err}
+		return syncResult{oldKey: syncObj.key, err: err}
 	}
-	targetMD5, err := CalcMD5(targetObj.GetBody())
+	targetMD5, err := storage.CalcMD5(targetObj.GetBody())
 	if err != nil {
-		return syncResult{oldKey: syncObj.key, newKey: result, err: err}
+		return syncResult{oldKey: syncObj.key, err: err}
 	}
 
 	if targetMD5 != originMD5 {
 		log.Debugf("failed to verify object %s md5: %s, %s", syncObj.key, originMD5, targetMD5)
-		return syncResult{verified: false, oldKey: syncObj.key, newKey: result}
+		return syncResult{verified: false, oldKey: syncObj.key}
 	}
-	return syncResult{verified: true, oldKey: syncObj.key, newKey: result}
+	return syncResult{verified: true, oldKey: syncObj.key}
 }
 
 func migrate(
 	dest storage.StorDest,
 	source storage.StorSrc,
 	w *bufio.Writer,
-	retryFile *os.File) {
+	oidFile *os.File) {
 	var stop = make(chan struct{})
 	var totalObjectsNum = make(chan int)
 	var result = make(chan syncResult, SyncWorkerCnt)
 	var toSyncObjs = make(chan syncObjItem, SyncWorkerCnt)
 
-	go getObjListFromFile(source, retryFile, totalObjectsNum, toSyncObjs)
+	go getObjListFromFile(oidFile, totalObjectsNum, toSyncObjs)
 
 	for i := 0; i < SyncWorkerCnt; i++ {
 		go syncWorker(stop, result, toSyncObjs, dest, source)
@@ -92,12 +90,13 @@ func migrate(
 	<-stop
 }
 
-func getObjListFromFile(source storage.S3Src,
-	retryFile *os.File,
-	totalNum chan<- int,
-	toSyncObjs chan<- syncObjItem) {
+func getObjListFromFile(oidFile *os.File, totalNum chan<- int, toSyncObjs chan<- syncObjItem) {
+	if oidFile == nil {
+		log.Errorf("no oid file provided")
+		return
+	}
 	total := 0
-	rd := bufio.NewReader(retryFile)
+	rd := bufio.NewReader(oidFile)
 	for {
 		line, err := rd.ReadString('\n')
 		if err != nil {
@@ -135,8 +134,7 @@ func getObjListFromFile(source storage.S3Src,
 		}
 
 		toSyncObjs <- syncObjItem{
-			key:  key,
-			eTag: "",
+			key: key,
 		}
 		total++
 	}
@@ -146,8 +144,8 @@ func syncWorker(
 	stop <-chan struct{},
 	result chan<- syncResult,
 	toSyncObjs <-chan syncObjItem,
-	dest storage.StorageDest,
-	source storage.S3Src,
+	dest storage.StorDest,
+	source storage.StorSrc,
 ) {
 	for {
 		select {

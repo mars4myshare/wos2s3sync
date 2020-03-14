@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"bytes"
 	"errors"
 	"io"
 
@@ -38,49 +37,54 @@ func NewS3Storage(endpoint, ak, sk, bucket string) *S3Storage {
 
 func (t *S3Storage) Write(key string, obj SyncObject) (string, error) {
 	body := obj.GetBody()
+	pr, pw := io.Pipe()
+	tr := io.TeeReader(body, pw)
 	defer body.Close()
-	var md5Buf, uploadBuf bytes.Buffer
-	mw := io.MultiWriter(&md5Buf, &uploadBuf)
 
-	type md5Result struct {
+	type Result struct {
 		value string
-		err Error
+		err   error
 	}
+	done := make(chan Result)
+	defer close(done)
 
-	uploadDone := make(chan Error)
-	md5Done := make(chan md5Result)
 	go func() {
+		defer pw.Close()
 		svc := s3.New(session.New(t.Config))
+		contentLength := obj.GetContentLength()
+		contentType := obj.GetContentType()
 		input := &s3.PutObjectInput{
-			Body:   aws.ReadSeekCloser(uploadBuf),
-			Bucket: aws.String(t.Bucket),
-			Key:    aws.String(key),
+			Body:          aws.ReadSeekCloser(tr),
+			Bucket:        aws.String(t.Bucket),
+			Key:           aws.String(key),
+			ContentLength: &contentLength,
+			ContentType:   &contentType,
 			//StorageClass: aws.String("STANDARD_IA"),
 		}
 		_, err := svc.PutObject(input)
-		uploadDone <- err
-	}
+		done <- Result{"", err}
+	}()
 	go func() {
-		md5, err := CalcMD5(md5Buf)
-		md5Done <- md5Result{md5, err}
-	}
-	if _, err := io.Copy(mw, body); err != nil {
-		return "", err
-	}
+		md5, err := CalcMD5(pr)
+		done <- Result{md5, err}
+	}()
 
-	md5 := <- md5Done
-	if md5.err != nil {
-		return "", md5.err
+	var md5 string
+	var err error
+	for i := 0; i < 2; i++ {
+		r := <-done
+		if r.err != nil {
+			err = r.err
+			continue
+		}
+		if r.value != "" {
+			md5 = r.value
+		}
 	}
-	uploadedError := <-uploadDone
-	if uploadedError != nil {
-		return "", uploadedError
-	}
-
-	return md5.value, nil
+	return md5, err
 }
 
-func (t *S3Storage) GetObject(key string) (SyncObject, error) {
+func (t *S3Storage) Read(key string) (SyncObject, error) {
 	input := &s3.GetObjectInput{
 		Bucket: aws.String(t.Bucket),
 		Key:    aws.String(key),
